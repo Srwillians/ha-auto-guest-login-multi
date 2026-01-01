@@ -1,69 +1,42 @@
-import express from "express"
-import config from '/data/options.json' assert { type: 'json' };
-import { AuthClient } from "./auth-client.js";
-import { HaClient } from "./ha-client.js";
-import { Utils } from "./utils.js";
-import QRCode from 'qrcode';
-
-const dashboard = config.guest_dashboard_path;
-const guestUserName = config.guest_username;
-const guestPassword = config.guest_password;
-const welcomeScreenDelay = config.welcome_screen_delay_ms ?? 3000;
-const welcomeScreenMainText = config.welcome_screen_main_text ?? 'Thanks for Visiting';
-const welcomeScreenSecondaryText = config.welcome_screen_secondary_text ?? 'Redirecting to Home Assistant...';
-const internalHaUrlFromConfig = config.advanced_internal_base_ha_url_and_port || null; // empty string by default.
-const redirectBaseUrlFromConfig = config.advanced_redirect_base_ha_url_and_port || null; // empty string by default.
-const supervisorToken = process.env.SUPERVISOR_TOKEN;
-const haClient = new HaClient(supervisorToken);
-const haPort = await haClient.getHaPort();
-const addonPort = await haClient.getAddOnPort();
-
-const authClient = new AuthClient(guestUserName, guestPassword);
-const utils = new Utils(addonPort);
+const express = require('express');
 const app = express();
-app.set('view engine', 'ejs');
+const path = require('path');
 
-app.get('/', async (req, res) => {
-  await haClient.postLoginEvent(req);
-  res.render("pages/guest-welcome", { 
-    delay: welcomeScreenDelay,
-    mainText: welcomeScreenMainText,
-    secondaryText: welcomeScreenSecondaryText
-  });
+// --- CONFIGURAÇÃO DAS 6 CASAS ---
+const inquilinos = {
+  "casa1": { user: "inquilino1", pass: "senha1", dash: "/lovelace-casa1/0" },
+  "casa2": { user: "inquilino2", pass: "senha2", dash: "/lovelace-casa2/0" },
+  "casa3": { user: "inquilino3", pass: "senha3", dash: "/lovelace-casa3/0" },
+  "casa4": { user: "inquilino4", pass: "senha4", dash: "/lovelace-casa4/0" },
+  "casa5": { user: "inquilino5", pass: "senha5", dash: "/lovelace-casa5/0" },
+  "casa6": { user: "inquilino6", pass: "senha6", dash: "/lovelace-casa6/0" }
+};
+
+const HA_URL = "http://192.168.1.100:8123"; // TROQUE PELO IP DO SEU HA
+
+app.get('/login', (req, res) => {
+  const id = req.query.id;
+  const config = inquilinos[id];
+
+  if (!config) {
+    return res.status(404).send("Casa não encontrada.");
+  }
+
+  // Esta parte gera um formulário HTML que envia os dados sozinho para o HA
+  // É a forma mais simples de "enganar" o login sem dar erro de segurança
+  res.send(`
+    <html>
+      <body onload="document.forms[0].submit()">
+        <form method="POST" action="${HA_URL}/auth/login">
+          <input type="hidden" name="username" value="${config.user}">
+          <input type="hidden" name="password" value="${config.pass}">
+          <input type="hidden" name="client_id" value="${HA_URL}">
+          <input type="hidden" name="redirect_uri" value="${HA_URL}${config.dash}?kiosk">
+        </form>
+        <p>Conectando à ${id}...</p>
+      </body>
+    </html>
+  `);
 });
 
-app.use('/admin/assets', express.static('assets'));
-
-app.get('/admin', (req, res) => {
-  res.render('pages/admin', {
-    guestLoginUrl: `${utils.getGuestLoginUrl(req)}`
-  });
-});
-
-app.get('/admin/qr.svg', async (req, res) => {
-  const qrCode = await QRCode.toString(utils.getGuestLoginUrl(req), { type: 'svg' });
-  res.set('Content-Type', 'image/svg+xml');
-  res.send(qrCode);
-});
-
-app.get('/api/getRedirectUri', async (req, res) => {
-  const portString = [443, 80].includes(haPort) ? '' : `:${haPort}`;
-  const haUrl = `${req.protocol}://${req.hostname}${portString}`;
-  const internalUrl = internalHaUrlFromConfig ?? haUrl;
-  const redirectBaseUrl = redirectBaseUrlFromConfig ?? haUrl;
-  console.log('recieved request from:', `${req.protocol}://${req.hostname}`);
-  console.log('using internal url:', internalUrl);
-  console.log('using redirect baseUrl:', redirectBaseUrl);
-
-  const redirectUri = await authClient.getRedirectUri(internalUrl, redirectBaseUrl, dashboard)
-  console.log('sending redirect uri to client');
-  console.log(`\tredirectUri: ${redirectUri}`);
-  console.log('\n--------\n');
-  res.send(redirectUri);
-});
-
-const internalPort = 80;
-app.listen(internalPort, () => {
-  console.log(`HomeAssistant found on port ${haPort}`);
-  console.log(`Auto Guest Login at port ${addonPort}`);
-});
+app.listen(8080, () => console.log('Servidor Multi-Casa rodando na porta 8080'));
